@@ -114,7 +114,72 @@ end
 User.where(first_name: AW.normalized_name.eq("jose"))
 ```
 
-Custom helpers return ordinary ArelWhere expressions, so predicates and boolean combinations still work. They use the explicit `AW` prefix; defining a helper does not add it to `ArelWhereRefine`.
+Custom helpers return ordinary ArelWhere expressions, so predicates and boolean combinations still work. They use the explicit `AW` prefix; defining a helper does not add it to `ArelWhereRefine` or `AW::Helpers`.
+
+### Including helpers in application classes
+
+Include `AW::Helpers` to make bare predicate and function helpers available in instance
+methods, including methods defined in subclasses. This uses normal Ruby inheritance and
+does not require a refinement or a builder block:
+
+```ruby
+class ApplicationController < ActionController::Base
+  include AW::Helpers
+end
+
+class UsersController < ApplicationController
+  def index
+    @users = User.where(first_name: lower.matches("nic%"))
+  end
+end
+```
+
+Use `extend` for class methods and chainable Active Record query methods. Include it as well if model
+instance methods need the helpers:
+
+```ruby
+class ApplicationRecord < ActiveRecord::Base
+  primary_abstract_class
+  include AW::Helpers
+  extend AW::Helpers
+end
+
+class User < ApplicationRecord
+  def self.matching_name(pattern)
+    where(first_name: lower.matches(pattern))
+  end
+end
+
+User.where(active: true).matching_name("nic%")
+```
+
+Rails evaluates `scope` lambdas on a relation, which does not delegate private model
+helpers. Use a class query method as above, or explicit `AW` calls inside a scope lambda:
+
+```ruby
+scope :matching_name, ->(pattern) { where(first_name: AW.lower.matches(pattern)) }
+```
+
+The helpers are private methods, intended for bare calls; they do not become public
+controller actions. Use explicit `AW.lower`, `AW.gt`, etc. when calling from outside the
+receiver. The module is never included automatically. An application can explicitly enable
+it globally in an initializer:
+
+```ruby
+Object.include(AW::Helpers)
+```
+
+Global inclusion makes the helpers available through `Object` inheritance, including to
+class objects, and affects code throughout the application. Existing methods follow Ruby's
+normal lookup rules: methods defined directly on a class win over an included module;
+included helpers can shadow methods from its superclass. Use `prepend AW::Helpers` to
+deliberately put helpers ahead of methods on that particular class. A subclass's own methods
+still take precedence over helpers prepended to its superclass.
+
+There is no collision check or automatic restoration for this persistent mixin. Once helpers
+are included, call them directly; `AW.build` on that receiver detects them as existing
+methods and requires `override: true`. The module exposes the same built-in helper set as
+the refinement, including `function`; application-defined `AW` helpers remain explicit calls.
 
 ### Building predicates in a block
 

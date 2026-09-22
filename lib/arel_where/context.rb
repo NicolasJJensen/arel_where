@@ -1,13 +1,11 @@
-require "arel_where/core"
+require "arel_where/helpers"
 
 module AW
   class HelperCollisionError < ArgumentError; end
   class ContextInUseError < RuntimeError; end
 
   class Context < BasicObject
-    ::AW::KNOWN_METHODS.each do |name|
-      define_method(name) { |*args| ::AW.public_send(name, *args) }
-    end
+    include ::AW::Helpers
   end
 
   class HelperScope
@@ -88,7 +86,7 @@ module AW
     def install
       KNOWN_METHODS.each do |name|
         @installed << name
-        @singleton.define_method(name) { |*args| AW.public_send(name, *args) }
+        @singleton.define_method(name, Helpers.instance_method(name))
         @singleton.__send__(:public, name)
       end
     rescue Exception
