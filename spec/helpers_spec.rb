@@ -74,8 +74,8 @@ RSpec.describe AW::Helpers do
 
   it "retains included helpers after an explicitly overriding build" do
     receiver = Object.new.extend(AW::Helpers)
-    expect { receiver.instance_exec { AW.build { lower } } }.to raise_error(AW::HelperCollisionError)
-    expression = receiver.instance_exec { AW.build(override: true) { lower } }
+    expect { receiver.instance_exec { AW.with_helpers { lower } } }.to raise_error(AW::HelperCollisionError)
+    expression = receiver.instance_exec { AW.with_helpers(override: true) { lower } }
     expect(expression).to be_a(AW::Chain)
     expect(receiver.method(:lower).owner).to eq(AW::Helpers)
   end

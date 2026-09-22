@@ -6,6 +6,7 @@ module AW
 
   class Context < BasicObject
     include ::AW::Helpers
+    public(*::AW::KNOWN_METHODS)
   end
 
   class HelperScope
@@ -17,7 +18,7 @@ module AW
         @mutex.synchronize do
           if (scope = @active[receiver])
             unless scope.owner == [Thread.current, Fiber.current]
-              raise ContextInUseError, "AW.build is already active on this receiver in another thread or fiber"
+              raise ContextInUseError, "AW.with_helpers is already active on this receiver in another thread or fiber"
             end
             scope.depth += 1
           else
@@ -47,10 +48,10 @@ module AW
     attr_accessor :depth
 
     def initialize(receiver, override:)
-      raise FrozenError, "AW.build cannot install helpers on a frozen receiver" if receiver.frozen?
+      raise FrozenError, "AW.with_helpers cannot install helpers on a frozen receiver" if receiver.frozen?
 
       @singleton = receiver.singleton_class
-      raise FrozenError, "AW.build cannot install helpers on a frozen singleton class" if @singleton.frozen?
+      raise FrozenError, "AW.with_helpers cannot install helpers on a frozen singleton class" if @singleton.frozen?
 
       @owner = [Thread.current, Fiber.current]
       @depth = 1
@@ -61,13 +62,13 @@ module AW
         @singleton.method_defined?(name) || @singleton.private_method_defined?(name) || receiver.respond_to?(name, true)
       end
       unless override || collisions.empty?
-        raise HelperCollisionError, "AW.build helpers already exist: #{collisions.sort.join(', ')}; use override: true or AW.context"
+        raise HelperCollisionError, "AW.with_helpers helpers already exist: #{collisions.sort.join(', ')}; use override: true or AW.build"
       end
 
       # Singleton methods cannot override modules prepended ahead of the singleton class.
       prepended = @singleton.ancestors.take_while { |ancestor| ancestor != @singleton }
       if prepended.any? { |mod| KNOWN_METHODS.any? { |name| mod.method_defined?(name) || mod.private_method_defined?(name) } }
-        raise HelperCollisionError, "AW.build cannot override prepended helpers; use AW.context"
+        raise HelperCollisionError, "AW.with_helpers cannot override prepended helpers; use AW.build"
       end
 
       KNOWN_METHODS.each do |name|
@@ -114,8 +115,8 @@ module AW
 
   private_constant :Context, :HelperScope
 
-  def self.build(override: false, &block)
-    raise ArgumentError, "AW.build requires a block" unless block
+  def self.with_helpers(override: false, &block)
+    raise ArgumentError, "AW.with_helpers requires a block" unless block
 
     receiver = block.binding.receiver
     scope = HelperScope.enter(receiver, override: override)
@@ -126,9 +127,10 @@ module AW
     end
   end
 
-  def self.context(&block)
-    raise ArgumentError, "AW.context requires a block" unless block
+  def self.build(&block)
+    raise ArgumentError, "AW.build requires a block" unless block
 
-    Context.new.instance_exec(&block)
+    context = Context.new
+    block.arity.zero? ? context.instance_exec(&block) : block.call(context)
   end
 end

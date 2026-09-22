@@ -12,7 +12,8 @@ Gem::Specification.new do |spec|
     Arel node for that column. Chains cover every Arel predication, SQL functions such as
     LOWER and TRIM, and boolean combinators over the same attribute. An opt-in refinement
     drops the AW prefix inside a single lexical scope. Helper blocks can preserve the
-    caller's context with AW.build or use a separate receiver with AW.context. Wharel-derived
+    caller's context with AW.with_helpers; AW.build supplies a helper context implicitly
+    or through a block parameter. Wharel-derived
     Arel blocks support filtering, ordering, selection, grouping, and value extraction.
   DESCRIPTION
   spec.license = "MIT"

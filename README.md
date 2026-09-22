@@ -40,7 +40,7 @@ User.where(first_name: eq("Alice").or(eq("Bob")))
 
 The refinement only affects that lexical scope. The gem loads it but never activates it for
 you. The examples below use the refinement for lexical bare words; `AW.build` and
-`AW.context` are available when a block is a better fit, and every form has an explicit `AW`
+`AW.with_helpers` are available when a block is a better fit, and every form has an explicit `AW`
 equivalent.
 
 ### Predicates
@@ -187,15 +187,43 @@ deliberately put helpers ahead of methods on that particular class. A subclass's
 still take precedence over helpers prepended to its superclass.
 
 There is no collision check or automatic restoration for this persistent mixin. Once helpers
-are included, call them directly; `AW.build` on that receiver detects them as existing
+are included, call them directly; `AW.with_helpers` on that receiver detects them as existing
 methods and requires `override: true`. The module exposes the same built-in helper set as
 the refinement, including `function`; application-defined `AW` helpers remain explicit calls.
 
 ### Building predicates in a block
 
-`AW.build` makes the known predicate and function helpers available as bare words to
-the receiver of the block. It preserves that receiver as `self`, including its instance
-variables:
+`AW.build` follows the same context convention as the Arel query blocks: a block without
+parameters runs against a separate helper receiver, while a block taking a parameter
+keeps the caller's `self` and receives that helper object explicitly.
+
+```ruby
+pattern = "nic%"
+
+AW.build do
+  User.where(first_name: lower.matches(pattern))
+end
+
+AW.build do |aw|
+  User.where(first_name: aw.lower.matches(@pattern), id: aw.gt(minimum_id))
+      .order { first_name.lower.asc }
+end
+```
+
+In the first form, captured locals and lexical constants remain available, but caller
+instance variables and application methods do not. In the second form, `@pattern` and
+`minimum_id` use the caller's original context. The supplied helper object has public
+predicate and function methods; helpers included through `AW::Helpers` or `AW::DSL`
+remain private.
+
+Neither form installs methods on the caller, checks for collisions, or needs to restore
+anything. Both can be called from frozen receivers and return the block's result, including
+a relation that can be executed later. `AW.build` does not accept an `override` option.
+
+### Temporarily adding bare helpers to the caller
+
+Use `AW.with_helpers` when you want bare helper calls while preserving the original
+`self`, instance variables, and application methods:
 
 ```ruby
 class UserFilter
@@ -204,49 +232,49 @@ class UserFilter
   end
 
   def results
-    AW.build { User.where(first_name: lower.matches(pattern)) }
+    AW.with_helpers do
+      User.where(first_name: lower.matches(@pattern), id: gt(minimum_id))
+    end
   end
 
   private
 
-  def pattern
-    @pattern
+  def minimum_id
+    0
   end
 end
 ```
 
-The block can call the receiver's private application methods as usual. By default,
-`AW.build` rejects a receiver that already has one of the built-in helper names as a public,
-protected, or private method, raising `AW::HelperCollisionError`. This includes methods
-provided through the receiver's singleton class. Pass `override: true` when the block is
-deliberately meant to override those methods for its duration:
+By default, `AW.with_helpers` raises `AW::HelperCollisionError` if the receiver already
+has a built-in helper name as a public, protected, or private method. Pass `override: true`
+to intentionally replace conflicting methods for the duration of the block:
 
 ```ruby
-AW.build(override: true) { gt(18) }
+AW.with_helpers(override: true) { gt(18) }
 ```
 
-Both builders return the block's result, including a relation that can be executed later.
-Nested builds on the same receiver reuse the installed helpers; the original methods and
+Nested calls on the same receiver reuse the installed helpers. The original methods and
 their visibility are restored when the outermost block exits, including when it raises.
 Frozen receivers or singleton classes are rejected. Helpers defined by modules prepended
 to the singleton class cannot be overridden, so those collisions raise even with
-`override: true`. Do not freeze the receiver or change its helper methods during a build;
+`override: true`. Do not freeze the receiver or change its helper methods during the block;
 doing so can prevent restoration.
 
-Helpers apply to the receiver for the whole execution of the block, including methods
-called by the block and other code that uses that receiver concurrently. Overlapping builds
-from another thread or fiber on the same receiver raise `AW::ContextInUseError`. Use
-`AW.context` or explicit `AW` calls if receiver-wide scope is not acceptable.
+The temporary helpers are visible to other methods called on that receiver and to other
+code using it concurrently. Overlapping `AW.with_helpers` calls from another thread or
+fiber on the same receiver raise `AW::ContextInUseError`. Use `AW.build` or explicit `AW`
+calls if receiver-wide scope is not acceptable.
 
-Use `AW.context` when you want a separate helper receiver instead of changing the block's
-receiver. The block then runs with a minimal `BasicObject`-based context:
+| Form | Block receiver | Helper calls |
+| --- | --- | --- |
+| `AW.build { ... }` | Separate helper context | `lower`, `gt(18)` |
+| `AW.build { \|aw\| ... }` | Original caller | `aw.lower`, `aw.gt(18)` |
+| `AW.with_helpers { ... }` | Original caller, with temporary helpers | `lower`, `gt(18)`; rejects collisions |
+| `AW.with_helpers(override: true) { ... }` | Original caller, with temporary helpers | `lower`, `gt(18)`; replaces conflicting methods |
 
-```ruby
-predicate = AW.context { gt(18).and(lt(65)) }
-```
-
-`AW.context` therefore does not expose the caller's `self` or instance variables. Both
-builders expose the built-in helper set; custom helpers remain explicit `AW` calls.
+All forms expose the built-in helper set, including `function`; custom `AW` helpers remain
+explicit calls. `AW.context` has been removed; use `AW.build` without a block parameter for
+that behavior.
 
 ### Arel query blocks
 
@@ -296,7 +324,7 @@ The two block styles can also be combined with the existing helper builders:
 ```ruby
 pattern = "nic%"
 
-AW.build do
+AW.with_helpers do
   User.where(first_name: lower.matches(pattern))
       .order { first_name.lower.asc }
 end
