@@ -24,33 +24,36 @@ Active Record behavior are worth knowing before using it:
 Calls without blocks otherwise keep their normal Active Record behavior. The shorthand
 options described later are not enabled automatically.
 
-## Quick start
+## Quick start: hash predicates
 
-Use `AW` for filters and a block for expressions in other query clauses:
+Enable the refinement at the top of a file to call predicate helpers without an `AW.`
+prefix:
 
 ```ruby
-User.where(first_name: AW.matches("nic%"))
-    .order { first_name.lower.asc }
+using ArelWhereRefine
+
+User.where(first_name: matches("nic%"))
 ```
 
-The hash key tells `AW.matches("nic%")` which column to filter. In the ordering block,
-`first_name` refers directly to the model's Arel column; `lower.asc` orders by its lowercase
-value. These blocks are built into this gem, so no separate wharel installation is needed.
+The hash key supplies the column; `matches("nic%")` supplies its condition. The refinement
+makes helpers available to code written after `using` in that file, or inside the class or
+module where you enable it. It does not install methods globally.
 
-The examples assume your Rails application has the models and columns shown. No optional
-helper setup is needed for the examples in the next two sections.
+The hash-predicate examples below assume this refinement is active unless they demonstrate
+another way to enable helpers. Examples also assume your application has the models and
+columns shown. Without the refinement, you can write `AW.matches("nic%")` explicitly.
 
 ## Filtering with hash conditions
 
 ### Predicates
 
-Each `AW` expression applies to the column named by its hash key:
+Each predicate expression applies to the column named by its hash key:
 
 ```ruby
-User.where(first_name: AW.eq("Alice"))
-User.where(first_name: AW.matches("Ali%"))
-User.where(date_of_birth: AW.lt(Date.new(2000, 1, 1)))
-User.where(last_name: AW.not_eq(nil))
+User.where(first_name: eq("Alice"))
+User.where(first_name: matches("Ali%"))
+User.where(date_of_birth: lt(Date.new(2000, 1, 1)))
+User.where(last_name: not_eq(nil))
 ```
 
 The predicate methods come from `Arel::Predications`, including `eq`, `not_eq`, `gt`,
@@ -58,7 +61,7 @@ The predicate methods come from `Arel::Predications`, including `eq`, `not_eq`, 
 call site:
 
 ```ruby
-User.where(first_name: AW.mathces("Ali%")) # Typo: raises NoMethodError
+User.where(first_name: mathces("Ali%")) # Typo: raises NoMethodError
 ```
 
 ### Combining conditions on one column
@@ -66,14 +69,14 @@ User.where(first_name: AW.mathces("Ali%")) # Typo: raises NoMethodError
 Use `and` and `or` to combine predicates for the same hash key:
 
 ```ruby
-User.where(first_name: AW.eq("Alice").or(AW.eq("Bob")))
-User.where(date_of_birth: AW.gteq(Date.new(1990)).and(AW.lt(Date.new(2000))))
+User.where(first_name: eq("Alice").or(eq("Bob")))
+User.where(date_of_birth: gteq(Date.new(1990)).and(lt(Date.new(2000))))
 ```
 
 Different hash keys remain ordinary Active Record conditions joined with AND:
 
 ```ruby
-User.where(first_name: AW.matches("Ali%"), active: true)
+User.where(first_name: matches("Ali%"), active: true)
 ```
 
 ### SQL functions
@@ -81,12 +84,12 @@ User.where(first_name: AW.matches("Ali%"), active: true)
 Function helpers transform the column before applying a predicate:
 
 ```ruby
-User.where(first_name: AW.lower.eq("alice"))
-User.where(last_name: AW.upper.matches("SM%"))
-User.where(first_name: AW.length.gt(3))
-User.where(first_name: AW.trim.lower.eq("alice"))
-User.where(first_name: AW.coalesce("Anonymous").eq("Anonymous"))
-User.where(first_name: AW.replace("-", " ").eq("Mary Jane"))
+User.where(first_name: lower.eq("alice"))
+User.where(last_name: upper.matches("SM%"))
+User.where(first_name: length.gt(3))
+User.where(first_name: trim.lower.eq("alice"))
+User.where(first_name: coalesce("Anonymous").eq("Anonymous"))
+User.where(first_name: replace("-", " ").eq("Mary Jane"))
 ```
 
 Built-in function helpers are `lower`, `upper`, `length`, `trim`, `coalesce`, `concat`,
@@ -98,12 +101,12 @@ accepted argument types depend on the database.
 
 Inside a query block, column names return actual Arel columns. For example,
 `first_name.lower` calls Arel's `lower` method on `User.arel_table[:first_name]`.
-This differs from `AW.lower`, which waits for a hash key to supply the column. The built-in
-`AW` function list does not imply that every Arel column has those same methods.
+These blocks expose Arel column methods, independently of the refinement. The hash
+function helper list does not imply that every Arel column has those same methods.
 
 ```ruby
 User.order { first_name.lower.asc }
-User.select { first_name.lower.as("normalized_name") }
+User.select { first_name.lower.as("lowercase_first_name") }
 User.group { organisation_id }.having { id.count.gt(1) }.pluck(:organisation_id)
 User.pluck { first_name.lower }
 User.pluck { [id, first_name.lower] }
@@ -128,7 +131,7 @@ pattern = "nic%"
 User.where { first_name.lower.matches(pattern) }
 ```
 
-To keep the caller's `self`, give the block a row parameter and access columns through it:
+To keep the caller's `self`, give the block a model-named parameter and access columns through it:
 
 ```ruby
 class UserSearch
@@ -137,30 +140,57 @@ class UserSearch
   end
 
   def results
-    User.where { |row| row.first_name.lower.matches(@pattern) }
+    User.where { |user| user.first_name.lower.matches(@pattern) }
   end
 end
 ```
 
 ### Filtering with Arel blocks
 
-Hash predicates remain available alongside blocks. Blocks also support `where`,
-`where.not`, and `or`, which can be useful for conditions spanning several columns:
+Blocks also support `where`, `where.not`, and `or`, which can be useful for conditions
+spanning several columns:
 
 ```ruby
 User.where { first_name.matches("Nic%").or(last_name.matches("Nic%")) }
 User.where.not { first_name.eq("Bob") }
-User.where(active: true).or { first_name.eq("Nic") }
+User.where { active.eq(true) }.or { first_name.eq("Nic") }
 ```
 
 Unknown column names raise an error. Blocks do not create joins or resolve association
-names automatically. Cross-table examples are covered under [Advanced usage](#advanced-usage).
+names automatically. The next example shows an explicit join.
 
-## Optional shorthand for hash predicates
+### Conditions across joined tables
 
-Explicit `AW` calls always work without additional setup. The following options let you
-shorten those calls in a block, an application class, or a file. Choose the form that fits
-where you write queries; you do not need to enable all of them.
+Supply joins with ordinary Active Record methods. In this example, assume `Comment`
+belongs to `Post` through `:post`. The inner query provides a convenient column lookup
+object for the posts table; the returned relation contributes its conditions to the outer
+query:
+
+```ruby
+Comment.joins(:post).where do |comment|
+  Post.where { |post| comment.content.matches(post.title) }
+end
+```
+
+This compares each joined comment's content with its post's title. It extracts Arel
+constraints from the inner relation, rather than creating a subquery or importing the
+whole relation. Inner joins, ordering, selection, and limits are not imported. Standard
+Active Record structural compatibility rules still apply when combining relations with `or`.
+
+### Combining the two query styles
+
+A hash filter can be followed by a block query clause:
+
+```ruby
+User.where(first_name: matches("nic%"))
+    .order { first_name.lower.asc }
+```
+
+## Alternatives to the refinement
+
+The following options enable hash-predicate helpers without `using ArelWhereRefine`.
+They are alternatives, not additional setup required for the preceding examples. Choose
+one that suits where you write your queries.
 
 ### A helper block: AW.build
 
@@ -172,13 +202,10 @@ pattern = "nic%"
 
 AW.build do
   User.where(first_name: lower.matches(pattern))
-      .order { first_name.lower.asc }
 end
 ```
 
-Local variables remain available, but caller instance variables and methods do not. The
-inner `order` block has its own column lookup object: `lower` in the hash is a predicate
-helper, while `first_name.lower` in the ordering is an Arel column expression.
+Local variables remain available, but caller instance variables and methods do not.
 
 Give `AW.build` a block parameter to preserve your original `self` and call the helpers
 explicitly on that parameter:
@@ -282,36 +309,22 @@ class User < ApplicationRecord
 end
 ```
 
-If you prefer Rails' `scope` declaration, use `AW.lower` explicitly inside the lambda.
-This version needs no helper mixin:
+For a `scope` lambda, the refinement introduced at the start of this guide works because
+it applies where the lambda is written. This version needs no helper mixin:
 
 ```ruby
 class User < ApplicationRecord
+  using ArelWhereRefine
+
   scope :matching_name, ->(pattern) {
-    where(first_name: AW.lower.matches(pattern))
+    where(first_name: lower.matches(pattern))
   }
 end
 ```
 
 Both alternatives support `User.matching_name("nic%")` and can be chained with `where`.
-With only model helpers enabled, changing `AW.lower` to bare `lower` in that scope lambda
-would raise `NameError`.
-
-### File- or class-scoped helpers: ArelWhereRefine
-
-Ruby refinements provide another way to enable bare calls. Put `using ArelWhereRefine`
-at the top of a file or inside a class or module, before the code that needs the helpers:
-
-```ruby
-using ArelWhereRefine
-
-User.where(first_name: lower.matches("nic%"))
-```
-
-A refinement applies to calls written in that scope; it does not permanently add helpers
-to application objects. An inherited method defined in a refined scope keeps that behavior.
-A method newly defined in a subclass, or in a reopened class, needs its own enclosing
-`using` declaration. Unlike the mixins, refinement activation is not inherited by new code.
+With only model helpers enabled, and no refinement in the lambda's defining scope, bare
+`lower` in that lambda would raise `NameError`.
 
 ### Temporary helpers on the original caller: AW.with_helpers
 
@@ -326,7 +339,6 @@ class UserFilter
   def results
     AW.with_helpers do
       User.where(first_name: lower.matches(@pattern))
-          .order { first_name.lower.asc }
     end
   end
 end
@@ -354,27 +366,29 @@ a broader effect than the isolated helper object provided by `AW.build`.
 
 ### Custom functions and helpers
 
-Use `AW.function` for another named SQL function:
+Use `function` for another named SQL function:
 
 ```ruby
-User.where(first_name: AW.function("UNACCENT").lower.eq("jose"))
+User.where(first_name: function("UNACCENT").lower.eq("jose"))
 ```
 
-This example requires PostgreSQL's `unaccent` extension. For a frequently used expression,
-add a helper to `AW`:
+This example requires PostgreSQL's `unaccent` extension. To give that function a reusable Ruby name,
+add an `unaccent` helper to `AW`:
 
 ```ruby
 # config/initializers/arel_where.rb
 module AW
-  def self.normalized_name
-    function("UNACCENT").trim.lower
+  def self.unaccent
+    function("UNACCENT")
   end
 end
 
-User.where(first_name: AW.normalized_name.eq("jose"))
+User.where(first_name: AW.unaccent.lower.eq("jose"))
 ```
 
-Custom helpers return ordinary expressions, but remain explicit `AW` calls. Adding one
+This helper only applies `UNACCENT` and can be used with any suitable text column;
+`lower` remains a separate operation. Custom helpers are an exception to the bare syntax:
+they return ordinary expressions, but require explicit `AW` calls. Adding one
 does not automatically add it to the refinement, mixins, or builder helper objects.
 
 ### Applying an expression to an Arel column
@@ -382,27 +396,9 @@ does not automatically add it to the refinement, mixins, or builder helper objec
 Use `apply_to` when an existing `AW` expression needs an explicit Arel column:
 
 ```ruby
-predicate = AW.eq("Alice").or(AW.eq("Bob"))
+predicate = eq("Alice").or(eq("Bob"))
 User.where(predicate.apply_to(User.arel_table[:first_name]))
 ```
-
-### Conditions across joined tables
-
-Supply joins with ordinary Active Record methods. In this example, assume `Comment`
-belongs to `Post` through `:post`. The inner query provides a convenient column lookup
-object for the posts table; the returned relation contributes its conditions to the outer
-query:
-
-```ruby
-Comment.joins(:post).where do |comment|
-  Post.where { |post| comment.content.matches(post.title) }
-end
-```
-
-This compares each joined comment's content with its post's title. It extracts Arel
-constraints from the inner relation, rather than creating a subquery or importing the
-whole relation. Inner joins, ordering, selection, and limits are not imported. Standard
-Active Record structural compatibility rules still apply when combining relations with `or`.
 
 ### Global helpers and method precedence
 
@@ -441,6 +437,10 @@ the temporary helpers. Use `AW.build` or explicit `AW` calls when that scope is 
 `AW.build` can be used from frozen receivers and does not accept `override: true`.
 
 ### Refinement scope and method precedence
+
+An inherited method defined in a refined scope keeps that behavior. A method newly defined
+in a subclass, or in a reopened class, needs its own enclosing `using` declaration. Unlike
+the mixins, refinement activation is not inherited by new code.
 
 `ArelWhereRefine` refines `Object`. Within an enabled scope, unrelated objects without their
 own matching method can also resolve predicate helpers:
