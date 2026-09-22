@@ -134,14 +134,13 @@ class UsersController < ApplicationController
 end
 ```
 
-Use `extend` for class methods and chainable Active Record query methods. Include it as well if model
-instance methods need the helpers:
+Use `extend AW::Helpers` for class methods and chainable Active Record query methods.
+To enable both instance and class helpers with one declaration, include `AW::DSL`:
 
 ```ruby
 class ApplicationRecord < ActiveRecord::Base
   primary_abstract_class
-  include AW::Helpers
-  extend AW::Helpers
+  include AW::DSL
 end
 
 class User < ApplicationRecord
@@ -153,6 +152,17 @@ end
 User.where(active: true).matching_name("nic%")
 ```
 
+| Declaration | Helpers available in |
+| --- | --- |
+| `include AW::Helpers` | Instance methods |
+| `extend AW::Helpers` | Class methods |
+| `include AW::DSL` | Both instance and class methods |
+
+Both kinds of helpers are inherited, including by methods newly defined in subclasses.
+`AW::DSL` uses the same private helpers and normal method lookup as the separate declarations;
+it does not change `self`, override methods defined directly on the class, or activate a
+refinement. Include it directly in the application base class that needs both kinds of helpers.
+
 Rails evaluates `scope` lambdas on a relation, which does not delegate private model
 helpers. Use a class query method as above, or explicit `AW` calls inside a scope lambda:
 
@@ -162,7 +172,7 @@ scope :matching_name, ->(pattern) { where(first_name: AW.lower.matches(pattern))
 
 The helpers are private methods, intended for bare calls; they do not become public
 controller actions. Use explicit `AW.lower`, `AW.gt`, etc. when calling from outside the
-receiver. The module is never included automatically. An application can explicitly enable
+receiver. Neither module is included automatically. An application can explicitly enable
 it globally in an initializer:
 
 ```ruby
