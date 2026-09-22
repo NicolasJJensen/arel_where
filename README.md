@@ -1,126 +1,216 @@
 # arel_where
 
-Write composable Arel predicates inside Active Record hash conditions and use Arel blocks for query clauses.
+Build filters inside ordinary Active Record hashes, then use Arel blocks for ordering,
+selection, grouping, and other query clauses.
 
-## Installation and setup
+## Installation
 
-Add the gem to your Rails application's Gemfile, then run `bundle install`:
+Add the gem to your application's Gemfile and run `bundle install`:
 
 ```ruby
 gem "arel_where"
 ```
 
-Or:
+Requires Ruby 3.1+ and Active Record 7.0 through 8.x. The test suite covers Active Record
+7.0, 7.1, 7.2, 8.0, and 8.1.
 
-```sh
-bundle add arel_where
-```
+Loading the gem enables its query extensions application wide. Two changes to existing
+Active Record behavior are worth knowing before using it:
 
-Requires Ruby 3.1+ and Active Record 7.0 through 8.x. The suite runs green on Active Record 7.0, 7.1, 7.2, 8.0, and 8.1.
+- `relation.select { ... }` builds SQL selection. For Ruby record filtering, use
+  `relation.to_a.select { |record| ... }`.
+- A `Proc` used as a hash condition's value receives the Arel column and builds a predicate.
 
-Requiring the gem (which Bundler does for you) enables hash predicate handlers and Arel
-query blocks application wide. It does not activate the bare-word refinement or include
-the helper mixins; those remain opt-in. See [What loading the gem changes](#what-loading-the-gem-changes).
+Calls without blocks otherwise keep their normal Active Record behavior. The shorthand
+options described later are not enabled automatically.
 
-## Usage
+## Quick start
 
-Start with `AW` to build a predicate for the column in a hash condition:
-
-```ruby
-User.where(first_name: AW.eq("Alice").or(AW.eq("Bob")))
-```
-
-For shorter calls, activate `ArelWhereRefine` at the top of a file or inside a module:
+Use `AW` for filters and a block for expressions in other query clauses:
 
 ```ruby
-using ArelWhereRefine
-
-User.where(first_name: eq("Alice").or(eq("Bob")))
+User.where(first_name: AW.matches("nic%"))
+    .order { first_name.lower.asc }
 ```
 
-The refinement only affects that lexical scope. The gem loads it but never activates it for
-you. The examples below use the refinement for lexical bare words; `AW.build` and
-`AW.with_helpers` are available when a block is a better fit, and every form has an explicit `AW`
-equivalent.
+The hash key tells `AW.matches("nic%")` which column to filter. In the ordering block,
+`first_name` refers directly to the model's Arel column; `lower.asc` orders by its lowercase
+value. These blocks are built into this gem, so no separate wharel installation is needed.
+
+The examples assume your Rails application has the models and columns shown. No optional
+helper setup is needed for the examples in the next two sections.
+
+## Filtering with hash conditions
 
 ### Predicates
 
-Each predicate applies to the column named in the hash:
+Each `AW` expression applies to the column named by its hash key:
 
 ```ruby
-User.where(first_name: eq("Alice"))
-User.where(first_name: matches("Ali%"))
-User.where(date_of_birth: lt(18.years.ago.to_date))
-User.where(last_name: not_eq(nil))
+User.where(first_name: AW.eq("Alice"))
+User.where(first_name: AW.matches("Ali%"))
+User.where(date_of_birth: AW.lt(Date.new(2000, 1, 1)))
+User.where(last_name: AW.not_eq(nil))
 ```
 
-Chains accept every method in `Arel::Predications`, the SQL function helpers below, and
-`function`. Any other name raises `NoMethodError` where you wrote it, so a typo fails at
-the call site rather than deep inside query building:
+The predicate methods come from `Arel::Predications`, including `eq`, `not_eq`, `gt`,
+`gteq`, `lt`, `lteq`, `in`, and `matches`. Unknown helper names raise `NoMethodError` at the
+call site:
 
 ```ruby
-User.where(first_name: AW.mathces("Ali%")) # => NoMethodError: undefined method `mathces'
+User.where(first_name: AW.mathces("Ali%")) # Typo: raises NoMethodError
 ```
 
-### Combining predicates
+### Combining conditions on one column
 
-Use `and` and `or` to combine conditions on the same column:
+Use `and` and `or` to combine predicates for the same hash key:
 
 ```ruby
-User.where(first_name: eq("Alice").or(eq("Bob")))
-User.where(date_of_birth: gteq(Date.new(1990)).and(lt(Date.new(2000))))
+User.where(first_name: AW.eq("Alice").or(AW.eq("Bob")))
+User.where(date_of_birth: AW.gteq(Date.new(1990)).and(AW.lt(Date.new(2000))))
+```
+
+Different hash keys remain ordinary Active Record conditions joined with AND:
+
+```ruby
+User.where(first_name: AW.matches("Ali%"), active: true)
 ```
 
 ### SQL functions
 
-Use `lower` and `upper` for case conversion:
+Function helpers transform the column before applying a predicate:
 
 ```ruby
-User.where(first_name: lower.eq("alice"))
-User.where(last_name: upper.matches("SM%"))
+User.where(first_name: AW.lower.eq("alice"))
+User.where(last_name: AW.upper.matches("SM%"))
+User.where(first_name: AW.length.gt(3))
+User.where(first_name: AW.trim.lower.eq("alice"))
+User.where(first_name: AW.coalesce("Anonymous").eq("Anonymous"))
+User.where(first_name: AW.replace("-", " ").eq("Mary Jane"))
 ```
 
-Other built-in helpers are `length`, `trim`, `coalesce`, `concat`, `replace`, `abs`, `round`, `ceil`, and `floor`:
+Built-in function helpers are `lower`, `upper`, `length`, `trim`, `coalesce`, `concat`,
+`replace`, `abs`, `round`, `ceil`, and `floor`. The column—or preceding function result—is
+the first SQL argument; any supplied arguments follow it. Function availability and
+accepted argument types depend on the database.
+
+## Ordering and other Arel query blocks
+
+Inside a query block, column names return actual Arel columns. For example,
+`first_name.lower` calls Arel's `lower` method on `User.arel_table[:first_name]`.
+This differs from `AW.lower`, which waits for a hash key to supply the column. The built-in
+`AW` function list does not imply that every Arel column has those same methods.
 
 ```ruby
-User.where(first_name: length.gt(3))
-User.where(first_name: coalesce("Anonymous").eq("Anonymous"))
-User.where(first_name: trim.lower.eq("alice"))
-User.where(first_name: replace("-", " ").eq("Mary Jane"))
+User.order { first_name.lower.asc }
+User.select { first_name.lower.as("normalized_name") }
+User.group { organisation_id }.having { id.count.gt(1) }.pluck(:organisation_id)
+User.pluck { first_name.lower }
+User.pluck { [id, first_name.lower] }
+User.order(:id).pick { first_name.lower }
 ```
 
-The column (or preceding function result) is the first argument; additional arguments follow it. Function availability and accepted argument types depend on your database.
+For `select`, `order`, `group`, `pluck`, and `pick`, return an array to supply multiple
+expressions. Pass either normal arguments or a block to a query method; passing both raises
+`ArgumentError`. Chain separate calls when both are needed.
 
-### Extending ArelWhere
+Remember that a `select` block builds SQL, even on an already loaded relation. Use
+`relation.to_a.select { |record| ... }` to filter records in Ruby.
 
-Call any other named SQL function with `function`:
+### Accessing application state inside a query block
+
+With no block parameter, `self` becomes a separate column lookup object, called a virtual
+row. Caller instance variables and methods are unavailable, but local variables remain
+accessible:
 
 ```ruby
-User.where(first_name: function("UNACCENT").lower.eq("jose"))
+pattern = "nic%"
+User.where { first_name.lower.matches(pattern) }
 ```
 
-This example requires PostgreSQL's `unaccent` extension. For a frequently used expression, add your own helper to `AW`:
+To keep the caller's `self`, give the block a row parameter and access columns through it:
 
 ```ruby
-# config/initializers/arel_where.rb
-module AW
-  def self.normalized_name
-    function("UNACCENT").trim.lower
+class UserSearch
+  def initialize(pattern)
+    @pattern = pattern
+  end
+
+  def results
+    User.where { |row| row.first_name.lower.matches(@pattern) }
   end
 end
 ```
 
+### Filtering with Arel blocks
+
+Hash predicates remain available alongside blocks. Blocks also support `where`,
+`where.not`, and `or`, which can be useful for conditions spanning several columns:
+
 ```ruby
-User.where(first_name: AW.normalized_name.eq("jose"))
+User.where { first_name.matches("Nic%").or(last_name.matches("Nic%")) }
+User.where.not { first_name.eq("Bob") }
+User.where(active: true).or { first_name.eq("Nic") }
 ```
 
-Custom helpers return ordinary ArelWhere expressions, so predicates and boolean combinations still work. They use the explicit `AW` prefix; defining a helper does not add it to `ArelWhereRefine` or `AW::Helpers`.
+Unknown column names raise an error. Blocks do not create joins or resolve association
+names automatically. Cross-table examples are covered under [Advanced usage](#advanced-usage).
 
-### Including helpers in application classes
+## Optional shorthand for hash predicates
 
-Include `AW::Helpers` to make bare predicate and function helpers available in instance
-methods, including methods defined in subclasses. This uses normal Ruby inheritance and
-does not require a refinement or a builder block:
+Explicit `AW` calls always work without additional setup. The following options let you
+shorten those calls in a block, an application class, or a file. Choose the form that fits
+where you write queries; you do not need to enable all of them.
+
+### A helper block: AW.build
+
+Without a block parameter, `AW.build` runs against a separate helper object. Bare calls
+such as `lower` and `gt` produce the same expressions as `AW.lower` and `AW.gt`:
+
+```ruby
+pattern = "nic%"
+
+AW.build do
+  User.where(first_name: lower.matches(pattern))
+      .order { first_name.lower.asc }
+end
+```
+
+Local variables remain available, but caller instance variables and methods do not. The
+inner `order` block has its own column lookup object: `lower` in the hash is a predicate
+helper, while `first_name.lower` in the ordering is an Arel column expression.
+
+Give `AW.build` a block parameter to preserve your original `self` and call the helpers
+explicitly on that parameter:
+
+```ruby
+class UserFilter
+  def initialize(pattern)
+    @pattern = pattern
+  end
+
+  def results
+    AW.build do |aw|
+      User.where(first_name: aw.lower.matches(@pattern), id: aw.gt(minimum_id))
+    end
+  end
+
+  private
+
+  def minimum_id
+    0
+  end
+end
+```
+
+Here, `@pattern` and `minimum_id` belong to `UserFilter`, while `aw` supplies the expression
+helpers. Neither form installs methods on the caller. Both return the block's result,
+including a relation that can be executed later.
+
+### Helpers in application classes
+
+`AW::Helpers` supplies private predicate and function methods. `include` makes them
+available inside instance methods, such as controller actions:
 
 ```ruby
 class ApplicationController < ActionController::Base
@@ -134,13 +224,12 @@ class UsersController < ApplicationController
 end
 ```
 
-Use `extend AW::Helpers` for class methods and chainable Active Record query methods.
-To enable both instance and class helpers with one declaration, include `AW::DSL`:
+`extend` makes them available inside class methods, such as model query methods:
 
 ```ruby
 class ApplicationRecord < ActiveRecord::Base
   primary_abstract_class
-  include AW::DSL
+  extend AW::Helpers
 end
 
 class User < ApplicationRecord
@@ -152,78 +241,81 @@ end
 User.where(active: true).matching_name("nic%")
 ```
 
+The `def self.matching_name` method runs on the model class, where `lower` is available.
+It returns a relation, so it can be chained with other Active Record queries.
+
+To enable both instance and class helpers with one declaration, include `AW::DSL`:
+
+```ruby
+class ApplicationRecord < ActiveRecord::Base
+  primary_abstract_class
+  include AW::DSL
+end
+```
+
 | Declaration | Helpers available in |
 | --- | --- |
 | `include AW::Helpers` | Instance methods |
 | `extend AW::Helpers` | Class methods |
-| `include AW::DSL` | Both instance and class methods |
+| `include AW::DSL` | Both |
 
-Both kinds of helpers are inherited, including by methods newly defined in subclasses.
-`AW::DSL` uses the same private helpers and normal method lookup as the separate declarations;
-it does not change `self`, override methods defined directly on the class, or activate a
-refinement. Include it directly in the application base class that needs both kinds of helpers.
+Both kinds are inherited, including by methods newly defined in subclasses. Helpers stay
+private, so they do not become public controller actions. These declarations do not change
+`self`, and methods defined directly on the class take precedence over included helpers.
 
-Rails evaluates `scope` lambdas on a relation, which does not delegate private model
-helpers. Use a class query method as above, or explicit `AW` calls inside a scope lambda:
+### Model query methods versus Rails scope lambdas
 
-```ruby
-scope :matching_name, ->(pattern) { where(first_name: AW.lower.matches(pattern)) }
-```
+Adding helpers to a model class does not add them to every object used to build its queries.
+In particular, Rails runs a `scope` lambda on an `ActiveRecord::Relation`, not on the model
+class. That relation does not forward calls to the model's private helpers.
 
-The helpers are private methods, intended for bare calls; they do not become public
-controller actions. Use explicit `AW.lower`, `AW.gt`, etc. when calling from outside the
-receiver. Neither module is included automatically. An application can explicitly enable
-it globally in an initializer:
+These are two alternative ways to define the same query. A model class method can use the
+helpers supplied by `extend AW::Helpers`:
 
 ```ruby
-Object.include(AW::Helpers)
-```
+class User < ApplicationRecord
+  extend AW::Helpers
 
-Global inclusion makes the helpers available through `Object` inheritance, including to
-class objects, and affects code throughout the application. Existing methods follow Ruby's
-normal lookup rules: methods defined directly on a class win over an included module;
-included helpers can shadow methods from its superclass. Use `prepend AW::Helpers` to
-deliberately put helpers ahead of methods on that particular class. A subclass's own methods
-still take precedence over helpers prepended to its superclass.
-
-There is no collision check or automatic restoration for this persistent mixin. Once helpers
-are included, call them directly; `AW.with_helpers` on that receiver detects them as existing
-methods and requires `override: true`. The module exposes the same built-in helper set as
-the refinement, including `function`; application-defined `AW` helpers remain explicit calls.
-
-### Building predicates in a block
-
-`AW.build` follows the same context convention as the Arel query blocks: a block without
-parameters runs against a separate helper receiver, while a block taking a parameter
-keeps the caller's `self` and receives that helper object explicitly.
-
-```ruby
-pattern = "nic%"
-
-AW.build do
-  User.where(first_name: lower.matches(pattern))
-end
-
-AW.build do |aw|
-  User.where(first_name: aw.lower.matches(@pattern), id: aw.gt(minimum_id))
-      .order { first_name.lower.asc }
+  def self.matching_name(pattern)
+    where(first_name: lower.matches(pattern))
+  end
 end
 ```
 
-In the first form, captured locals and lexical constants remain available, but caller
-instance variables and application methods do not. In the second form, `@pattern` and
-`minimum_id` use the caller's original context. The supplied helper object has public
-predicate and function methods; helpers included through `AW::Helpers` or `AW::DSL`
-remain private.
+If you prefer Rails' `scope` declaration, use `AW.lower` explicitly inside the lambda.
+This version needs no helper mixin:
 
-Neither form installs methods on the caller, checks for collisions, or needs to restore
-anything. Both can be called from frozen receivers and return the block's result, including
-a relation that can be executed later. `AW.build` does not accept an `override` option.
+```ruby
+class User < ApplicationRecord
+  scope :matching_name, ->(pattern) {
+    where(first_name: AW.lower.matches(pattern))
+  }
+end
+```
 
-### Temporarily adding bare helpers to the caller
+Both alternatives support `User.matching_name("nic%")` and can be chained with `where`.
+With only model helpers enabled, changing `AW.lower` to bare `lower` in that scope lambda
+would raise `NameError`.
 
-Use `AW.with_helpers` when you want bare helper calls while preserving the original
-`self`, instance variables, and application methods:
+### File- or class-scoped helpers: ArelWhereRefine
+
+Ruby refinements provide another way to enable bare calls. Put `using ArelWhereRefine`
+at the top of a file or inside a class or module, before the code that needs the helpers:
+
+```ruby
+using ArelWhereRefine
+
+User.where(first_name: lower.matches("nic%"))
+```
+
+A refinement applies to calls written in that scope; it does not permanently add helpers
+to application objects. An inherited method defined in a refined scope keeps that behavior.
+A method newly defined in a subclass, or in a reopened class, needs its own enclosing
+`using` declaration. Unlike the mixins, refinement activation is not inherited by new code.
+
+### Temporary helpers on the original caller: AW.with_helpers
+
+`AW.with_helpers` keeps the caller's `self` and temporarily installs bare helper methods:
 
 ```ruby
 class UserFilter
@@ -233,108 +325,73 @@ class UserFilter
 
   def results
     AW.with_helpers do
-      User.where(first_name: lower.matches(@pattern), id: gt(minimum_id))
+      User.where(first_name: lower.matches(@pattern))
+          .order { first_name.lower.asc }
     end
-  end
-
-  private
-
-  def minimum_id
-    0
   end
 end
 ```
 
-By default, `AW.with_helpers` raises `AW::HelperCollisionError` if the receiver already
-has a built-in helper name as a public, protected, or private method. Pass `override: true`
-to intentionally replace conflicting methods for the duration of the block:
+Existing helper-name methods cause `AW::HelperCollisionError`. Use `override: true` only
+when you intend to replace those methods temporarily:
 
 ```ruby
 AW.with_helpers(override: true) { gt(18) }
 ```
 
-Nested calls on the same receiver reuse the installed helpers. The original methods and
-their visibility are restored when the outermost block exits, including when it raises.
-Frozen receivers or singleton classes are rejected. Helpers defined by modules prepended
-to the singleton class cannot be overridden, so those collisions raise even with
-`override: true`. Do not freeze the receiver or change its helper methods during the block;
-doing so can prevent restoration.
+Original methods are restored when the block exits, including after an exception. During
+the block, other code using that same receiver can see the temporary helpers too. This is
+a broader effect than the isolated helper object provided by `AW.build`.
 
-The temporary helpers are visible to other methods called on that receiver and to other
-code using it concurrently. Overlapping `AW.with_helpers` calls from another thread or
-fiber on the same receiver raise `AW::ContextInUseError`. Use `AW.build` or explicit `AW`
-calls if receiver-wide scope is not acceptable.
+| Form | Where helper calls are resolved |
+| --- | --- |
+| `AW.build { lower }` | A separate helper object |
+| `AW.build { \|aw\| aw.lower }` | An explicit helper object; original `self` is retained |
+| `AW.with_helpers { lower }` | Temporary methods on the original caller; rejects collisions |
+| `AW.with_helpers(override: true) { lower }` | Temporary methods on the original caller; overrides conflicts |
 
-| Form | Block receiver | Helper calls |
-| --- | --- | --- |
-| `AW.build { ... }` | Separate helper context | `lower`, `gt(18)` |
-| `AW.build { \|aw\| ... }` | Original caller | `aw.lower`, `aw.gt(18)` |
-| `AW.with_helpers { ... }` | Original caller, with temporary helpers | `lower`, `gt(18)`; rejects collisions |
-| `AW.with_helpers(override: true) { ... }` | Original caller, with temporary helpers | `lower`, `gt(18)`; replaces conflicting methods |
+## Advanced usage
 
-All forms expose the built-in helper set, including `function`; custom `AW` helpers remain
-explicit calls. `AW.context` has been removed; use `AW.build` without a block parameter for
-that behavior.
+### Custom functions and helpers
 
-### Arel query blocks
-
-The gem includes block queries adapted from [wharel](https://github.com/shioyama/wharel).
-No separate wharel installation or fork is needed. They work alongside ordinary hash
-conditions:
+Use `AW.function` for another named SQL function:
 
 ```ruby
-User.where(first_name: AW.matches("Nic%"))
-    .order { first_name.lower.asc }
-
-User.where { first_name.matches("Nic%").or(last_name.matches("Nic%")) }
-User.where.not { first_name.eq("Bob") }
-User.where(active: true).or { first_name.eq("Nic") }
+User.where(first_name: AW.function("UNACCENT").lower.eq("jose"))
 ```
 
-Blocks are supported by `where`, `where.not`, `or`, `order`, `select`, `group`, `having`,
-`pluck`, and `pick`. Return an Arel expression for the receiving clause:
+This example requires PostgreSQL's `unaccent` extension. For a frequently used expression,
+add a helper to `AW`:
 
 ```ruby
-User.select { first_name.lower.as("normalized_name") }
-User.group { organisation_id }.having { id.count.gt(1) }.pluck(:organisation_id)
-User.pluck { first_name.lower }
-User.pluck { [id, first_name.lower] }
-User.order(:id).pick { first_name.lower }
-```
-
-For `select`, `order`, `group`, `pluck`, and `pick`, return an array to supply multiple
-expressions.
-
-A block without parameters runs against a virtual row: `first_name` resolves to
-`User.arel_table[:first_name]`, and `lower` is then an Arel method on that column. This is
-column-based Arel, rather than the value-side `AW` helper API. Unknown column names raise
-an error. Blocks do not create joins or resolve association names automatically.
-
-For this zero-argument form, `self` changes, so caller instance variables and methods are
-not available. Captured local variables and lexical constants still work. Give the block a
-row parameter to preserve the original `self`, instance variables, and application methods:
-
-```ruby
-User.where { |row| row.first_name.matches(@pattern) }
-User.order { |row| row.first_name.lower.asc }
-```
-
-The two block styles can also be combined with the existing helper builders:
-
-```ruby
-pattern = "nic%"
-
-AW.with_helpers do
-  User.where(first_name: lower.matches(pattern))
-      .order { first_name.lower.asc }
+# config/initializers/arel_where.rb
+module AW
+  def self.normalized_name
+    function("UNACCENT").trim.lower
+  end
 end
+
+User.where(first_name: AW.normalized_name.eq("jose"))
 ```
 
-The outer block supplies value-side helpers; the inner block supplies columns and has its
-own receiver. It does not inherit the outer receiver's bare helpers.
+Custom helpers return ordinary expressions, but remain explicit `AW` calls. Adding one
+does not automatically add it to the refinement, mixins, or builder helper objects.
 
-For cross-table conditions, supply the join explicitly. A block can return another
-relation, from which the gem extracts and combines the Arel constraints:
+### Applying an expression to an Arel column
+
+Use `apply_to` when an existing `AW` expression needs an explicit Arel column:
+
+```ruby
+predicate = AW.eq("Alice").or(AW.eq("Bob"))
+User.where(predicate.apply_to(User.arel_table[:first_name]))
+```
+
+### Conditions across joined tables
+
+Supply joins with ordinary Active Record methods. In this example, assume `Comment`
+belongs to `Post` through `:post`. The inner query provides a convenient column lookup
+object for the posts table; the returned relation contributes its conditions to the outer
+query:
 
 ```ruby
 Comment.joins(:post).where do |comment|
@@ -342,114 +399,96 @@ Comment.joins(:post).where do |comment|
 end
 ```
 
-This extracts conditions, not a subquery or the entire relation. The inner relation's joins,
-ordering, selection, and limits are not imported. Standard Active Record structural
-compatibility rules still apply to `or`.
+This compares each joined comment's content with its post's title. It extracts Arel
+constraints from the inner relation, rather than creating a subquery or importing the
+whole relation. Inner joins, ordering, selection, and limits are not imported. Standard
+Active Record structural compatibility rules still apply when combining relations with `or`.
 
-Pass either normal arguments or a block to each query method. Passing both raises
-`ArgumentError`; chain separate calls when both are needed. Calls without blocks continue
-through Active Record normally.
+### Global helpers and method precedence
 
-`Relation#select` with a block now builds SQL selection rather than filtering Ruby records.
-Use `relation.to_a.select { |record| ... }` for Ruby filtering, even if the relation is
-already loaded.
-
-### Other Arel expressions
-
-Apply a predicate to an Arel column when building a query outside hash conditions:
+An application can opt into helpers throughout `Object`'s inheritance tree:
 
 ```ruby
-predicate = eq("Alice").or(eq("Bob"))
-User.where(predicate.apply_to(User.arel_table[:first_name]))
+# config/initializers/arel_where.rb
+Object.include(AW::Helpers)
 ```
 
-## What loading the gem changes
+This also reaches class objects and affects code throughout the application. Nothing
+includes the helpers globally by default.
 
-### The PredicateBuilder patch
+Normal Ruby method lookup applies: methods defined directly on a class win over an
+included module, while included helpers can shadow superclass methods. Use
+`prepend AW::Helpers` to intentionally place helpers ahead of methods on that particular
+class. A subclass's own methods still take precedence over helpers prepended to its parent.
 
-On load the gem prepends a module to `ActiveRecord::PredicateBuilder` that registers two
-handlers:
+Mixins have no collision checks or automatic restoration. A receiver that already has
+helpers will trigger `AW.with_helpers`' collision check; normally, use its existing helpers
+directly instead.
 
-- `AW::Expr` — the chains and junctions described above.
-- `Proc` — a lambda receives the Arel attribute and returns a node.
+### Temporary helper restrictions
 
-The `Proc` handler is not scoped to this gem. Once the gem is loaded, every `where` in the
-application accepts a lambda on the value side:
+`AW.with_helpers` checks public, protected, and private method names. Nested calls on the
+same receiver reuse the installed helpers, restoring original methods and visibility when
+the outermost call exits.
 
-```ruby
-Email.where(address: ->(attr) { attr.matches("%@example.com") })
-```
+Frozen receivers or singleton classes cannot be modified. Helpers in modules prepended to
+the singleton class cannot be overridden, even with `override: true`. Do not freeze the
+receiver or redefine its helper methods during a block; doing so can prevent restoration.
 
-If your application already passes a `Proc` as a `where` value for some other reason, that
-value now builds a predicate instead of being quoted.
+Overlapping calls from another thread or fiber on the same receiver raise
+`AW::ContextInUseError`. Other ordinary code using that receiver concurrently can still see
+the temporary helpers. Use `AW.build` or explicit `AW` calls when that scope is unsuitable.
+`AW.build` can be used from frozen receivers and does not accept `override: true`.
 
-### The block query patches
+### Refinement scope and method precedence
 
-The gem prepends block handling to `ActiveRecord::Base` class methods,
-`ActiveRecord::Relation`, and `ActiveRecord::QueryMethods::WhereChain`. This enables the
-query blocks above application wide, including the changed meaning of `select` blocks.
-It does not include `AW::Helpers` in application objects or activate the refinement.
-
-### The refinement is opt-in, and it refines Object
-
-`ArelWhereRefine` is defined at load time but never activated for you. Where you do write
-`using ArelWhereRefine`, note two things.
-
-It refines `Object`. Inside that lexical scope, any receiver that does not already define a
-refined method answers it with an `AW::Chain` rather than raising `NoMethodError`:
+`ArelWhereRefine` refines `Object`. Within an enabled scope, unrelated objects without their
+own matching method can also resolve predicate helpers:
 
 ```ruby
 using ArelWhereRefine
 
-42.matches("x")   # => AW::Chain, not NoMethodError
-"abc".overlaps(x) # => AW::Chain, not NoMethodError
+42.matches("x") # Returns an AW::Chain
 ```
 
-Refinements lose to a receiver's own methods, so a class that defines `eq` or `lower` keeps
-its own. The risk is the objects that define neither.
+Methods on subclasses take precedence over the refinement of `Object`. For example, a
+class defining its own `lower` keeps that method. The helper names are computed when the
+gem loads from Arel predicates and the built-in functions; predicates added to Arel later
+are not automatically included.
 
-The refined method list is computed at load time from `Arel::Predications.instance_methods`
-plus the function helpers and `function`. A predication added to Arel after this gem loads
-is not in the list.
+### Application-wide integration
 
-Ruby keeps a refinement on methods defined in the lexical scope where `using` appears. An
-inherited method defined under `using ArelWhereRefine` therefore keeps the refinement when
-called on a subclass. A method newly defined in that subclass, or in a reopened class scope,
-does not acquire it automatically. A subclass's own method still wins over the refined
-`Object` method.
+On load, the gem prepends handlers to `ActiveRecord::PredicateBuilder` for `AW::Expr`
+expressions and `Proc` values. The latter enables callbacks such as:
 
-### Namespace
+```ruby
+Email.where(address: ->(column) { column.matches("%@example.com") })
+```
 
-The gem defines a top-level two-letter constant, `AW`, chosen so the hash values stay short
-to read. It also defines `ArelWhereRefine`. If your application already owns a constant named
-`AW`, this gem will collide with it.
+Any existing `Proc` hash value is consequently interpreted as a predicate callback.
+Block handling is also prepended to `ActiveRecord::Base` class methods,
+`ActiveRecord::Relation`, and `ActiveRecord::QueryMethods::WhereChain`. This includes the
+changed meaning of `select` blocks described during installation.
 
-## Relationship to wharel and baby_squeel
-
-arel_where combines its value-side hash predicates with a block query interface adapted
-from [wharel](https://github.com/shioyama/wharel). The integrated implementation targets
-Active Record 7 through 8; wharel is not a runtime dependency and should not also be loaded
-for this functionality.
-
-Unlike the broader [baby_squeel](https://github.com/rzane/baby_squeel) association DSL,
-these blocks expose the current model's columns. Use ordinary Active Record joins and
-explicit Arel references for cross-table queries.
+The gem defines top-level `AW` and `ArelWhereRefine` constants. An application that already
+uses either name must resolve that conflict.
 
 ## Development
 
-Clone the repository, run `bundle install`, then `bundle exec rspec`. The suite needs a
-PostgreSQL server; set `TEST_DATABASE_URL` if the default `postgresql:///postgres` is not
-right for your machine.
+Run `bundle install`, then `bundle exec rspec`. The suite needs PostgreSQL. Set
+`TEST_DATABASE_URL` if the default `postgresql:///postgres` is not suitable.
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/NicolasJJensen/arel_where.
+Bug reports and pull requests are welcome at
+[the GitHub repository](https://github.com/NicolasJJensen/arel_where).
 
-## License
+## Attribution and license
 
-The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
+arel_where is available under the [MIT License](LICENSE.txt).
 
 The block query implementation in `lib/arel_where/block_queries.rb` is adapted from
 [wharel by Chris Salzberg](https://github.com/shioyama/wharel/tree/3b9079ccb84afdaaeb5dfd9a23017531ab77c8de),
 Copyright (c) 2018 Chris Salzberg. Its original MIT license is preserved in
 [licenses/wharel-MIT.txt](licenses/wharel-MIT.txt) and included in the packaged gem.
+Wharel is not a runtime dependency and should not also be loaded for this functionality.
