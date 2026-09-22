@@ -1,5 +1,6 @@
 require "active_record"
 require_relative "arel_where/version"
 require_relative "arel_where/core"
+require_relative "arel_where/context"
 require_relative "arel_where/active_record"
 require_relative "arel_where/refinement"

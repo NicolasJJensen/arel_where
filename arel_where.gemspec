@@ -11,7 +11,8 @@ Gem::Specification.new do |spec|
     predicate on the value side, so User.where(age: AW.gt(18).and(AW.lt(65))) builds the
     Arel node for that column. Chains cover every Arel predication, SQL functions such as
     LOWER and TRIM, and boolean combinators over the same attribute. An opt-in refinement
-    drops the AW prefix inside a single lexical scope.
+    drops the AW prefix inside a single lexical scope. Helper blocks can preserve the
+    caller's context with AW.build or use a separate receiver with AW.context.
   DESCRIPTION
   spec.license = "MIT"
   spec.homepage = "https://github.com/NicolasJJensen/arel_where"
