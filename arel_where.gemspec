@@ -12,7 +12,8 @@ Gem::Specification.new do |spec|
     Arel node for that column. Chains cover every Arel predication, SQL functions such as
     LOWER and TRIM, and boolean combinators over the same attribute. An opt-in refinement
     drops the AW prefix inside a single lexical scope. Helper blocks can preserve the
-    caller's context with AW.build or use a separate receiver with AW.context.
+    caller's context with AW.build or use a separate receiver with AW.context. Wharel-derived
+    Arel blocks support filtering, ordering, selection, grouping, and value extraction.
   DESCRIPTION
   spec.license = "MIT"
   spec.homepage = "https://github.com/NicolasJJensen/arel_where"
@@ -23,7 +24,7 @@ Gem::Specification.new do |spec|
   }
   spec.required_ruby_version = ">= 3.1"
   spec.files = Dir.chdir(__dir__) do
-    Dir["lib/**/*", "README.md", "CHANGELOG.md", "LICENSE.txt"]
+    Dir["lib/**/*", "licenses/*.txt", "README.md", "CHANGELOG.md", "LICENSE.txt"]
       .select { |f| File.file?(f) }
   end
   spec.require_paths = ["lib"]

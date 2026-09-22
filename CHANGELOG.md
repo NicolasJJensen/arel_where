@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Wharel-derived Arel blocks for `where`, `where.not`, `or`, `order`, `select`, `group`, `having`, `pluck`, and `pick`, with the original MIT attribution included.
 - `AW::DSL` to enable private instance and class helpers with one include.
 - `AW::Helpers` for optional inclusion or extension in application classes, with private predicate and function helpers.
 - `AW.build` for temporary predicate helpers that preserve the caller's context, with collision checks and explicit overrides.

@@ -1,6 +1,6 @@
 # arel_where
 
-Write composable Arel predicates directly inside Active Record hash conditions.
+Write composable Arel predicates inside Active Record hash conditions and use Arel blocks for query clauses.
 
 ## Installation and setup
 
@@ -18,9 +18,9 @@ bundle add arel_where
 
 Requires Ruby 3.1+ and Active Record 7.0 through 8.x. The suite runs green on Active Record 7.0, 7.1, 7.2, 8.0, and 8.1.
 
-Requiring the gem (which Bundler does for you) patches `ActiveRecord::PredicateBuilder`
-once, application wide. It does not activate the bare-word refinement; you opt into that
-per file. See [What loading the gem changes](#what-loading-the-gem-changes).
+Requiring the gem (which Bundler does for you) enables hash predicate handlers and Arel
+query blocks application wide. It does not activate the bare-word refinement or include
+the helper mixins; those remain opt-in. See [What loading the gem changes](#what-loading-the-gem-changes).
 
 ## Usage
 
@@ -248,6 +248,84 @@ predicate = AW.context { gt(18).and(lt(65)) }
 `AW.context` therefore does not expose the caller's `self` or instance variables. Both
 builders expose the built-in helper set; custom helpers remain explicit `AW` calls.
 
+### Arel query blocks
+
+The gem includes block queries adapted from [wharel](https://github.com/shioyama/wharel).
+No separate wharel installation or fork is needed. They work alongside ordinary hash
+conditions:
+
+```ruby
+User.where(first_name: AW.matches("Nic%"))
+    .order { first_name.lower.asc }
+
+User.where { first_name.matches("Nic%").or(last_name.matches("Nic%")) }
+User.where.not { first_name.eq("Bob") }
+User.where(active: true).or { first_name.eq("Nic") }
+```
+
+Blocks are supported by `where`, `where.not`, `or`, `order`, `select`, `group`, `having`,
+`pluck`, and `pick`. Return an Arel expression for the receiving clause:
+
+```ruby
+User.select { first_name.lower.as("normalized_name") }
+User.group { organisation_id }.having { id.count.gt(1) }.pluck(:organisation_id)
+User.pluck { first_name.lower }
+User.pluck { [id, first_name.lower] }
+User.order(:id).pick { first_name.lower }
+```
+
+For `select`, `order`, `group`, `pluck`, and `pick`, return an array to supply multiple
+expressions.
+
+A block without parameters runs against a virtual row: `first_name` resolves to
+`User.arel_table[:first_name]`, and `lower` is then an Arel method on that column. This is
+column-based Arel, rather than the value-side `AW` helper API. Unknown column names raise
+an error. Blocks do not create joins or resolve association names automatically.
+
+For this zero-argument form, `self` changes, so caller instance variables and methods are
+not available. Captured local variables and lexical constants still work. Give the block a
+row parameter to preserve the original `self`, instance variables, and application methods:
+
+```ruby
+User.where { |row| row.first_name.matches(@pattern) }
+User.order { |row| row.first_name.lower.asc }
+```
+
+The two block styles can also be combined with the existing helper builders:
+
+```ruby
+pattern = "nic%"
+
+AW.build do
+  User.where(first_name: lower.matches(pattern))
+      .order { first_name.lower.asc }
+end
+```
+
+The outer block supplies value-side helpers; the inner block supplies columns and has its
+own receiver. It does not inherit the outer receiver's bare helpers.
+
+For cross-table conditions, supply the join explicitly. A block can return another
+relation, from which the gem extracts and combines the Arel constraints:
+
+```ruby
+Comment.joins(:post).where do |comment|
+  Post.where { |post| comment.content.matches(post.title) }
+end
+```
+
+This extracts conditions, not a subquery or the entire relation. The inner relation's joins,
+ordering, selection, and limits are not imported. Standard Active Record structural
+compatibility rules still apply to `or`.
+
+Pass either normal arguments or a block to each query method. Passing both raises
+`ArgumentError`; chain separate calls when both are needed. Calls without blocks continue
+through Active Record normally.
+
+`Relation#select` with a block now builds SQL selection rather than filtering Ruby records.
+Use `relation.to_a.select { |record| ... }` for Ruby filtering, even if the relation is
+already loaded.
+
 ### Other Arel expressions
 
 Apply a predicate to an Arel column when building a query outside hash conditions:
@@ -276,6 +354,13 @@ Email.where(address: ->(attr) { attr.matches("%@example.com") })
 
 If your application already passes a `Proc` as a `where` value for some other reason, that
 value now builds a predicate instead of being quoted.
+
+### The block query patches
+
+The gem prepends block handling to `ActiveRecord::Base` class methods,
+`ActiveRecord::Relation`, and `ActiveRecord::QueryMethods::WhereChain`. This enables the
+query blocks above application wide, including the changed meaning of `select` blocks.
+It does not include `AW::Helpers` in application objects or activate the refinement.
 
 ### The refinement is opt-in, and it refines Object
 
@@ -311,65 +396,16 @@ The gem defines a top-level two-letter constant, `AW`, chosen so the hash values
 to read. It also defines `ArelWhereRefine`. If your application already owns a constant named
 `AW`, this gem will collide with it.
 
-## Comparison with wharel and baby_squeel
+## Relationship to wharel and baby_squeel
 
-All three let you write Arel without building the nodes by hand. They differ in where the
-Arel goes.
+arel_where combines its value-side hash predicates with a block query interface adapted
+from [wharel](https://github.com/shioyama/wharel). The integrated implementation targets
+Active Record 7 through 8; wharel is not a runtime dependency and should not also be loaded
+for this functionality.
 
-| | Form | Scope of the patch |
-| --- | --- | --- |
-| [wharel](https://github.com/shioyama/wharel) | Block DSL for relation clauses such as `where { age.gt(18) }`, plus `order`, `select`, `group`, `having`, `pluck`, and `pick` blocks | Adds block handling to the corresponding relation methods |
-| [baby_squeel](https://github.com/rzane/baby_squeel) | Full block DSL, covering associations, joins, functions, and grouping | Extends relations, associations, and query building |
-| arel_where | Ordinary hash condition, with a composable predicate on the value side: `where(age: AW.gt(18))` | Prepends one module to `ActiveRecord::PredicateBuilder` |
-
-The practical differences:
-
-- **The query keeps its hash shape.** `where(first_name: AW.matches("Ali%"))` merges, chains,
-  and reads like the `where` next to it. `AW.build` and `AW.context` are optional builders
-  for code that benefits from bare helper calls.
-- **The patch surface is one class.** arel_where prepends `ActiveRecord::PredicateBuilder` and
-  nothing else. wharel adds block handling to relation methods, while baby_squeel reaches
-  further into relation, association, and grouping internals.
-- **Bare words have explicit entry points.** `matches("Ali%")` without the `AW` prefix works
-  in a file or module using `ArelWhereRefine`, or inside an `AW.build`/`AW.context` block.
-- **Associations are out of scope.** baby_squeel can express joins and conditions across
-  associations; arel_where deliberately stops at one column's predicate. Use ordinary Active
-  Record joins, or `Relation#or`, for cross-column and cross-table logic.
-
-### Using arel_where with wharel
-
-wharel is optional and is not required by arel_where. The [published wharel 1.0.0
-metadata](https://rubygems.org/gems/wharel) and the [upstream gemspec](https://github.com/shioyama/wharel/blob/master/wharel.gemspec)
-currently target Active Record versions below 7, while arel_where supports Active Record 7
-through 8. The examples below describe source-level interoperability; use a maintained
-wharel fork or a future wharel release that supports your Active Record version before
-adding it to an application. Pointing Bundler at the current upstream Git branch does not
-resolve the dependency conflict.
-
-```ruby
-pattern = "Ali%"
-
-AW.build do
-  User.where(first_name: lower.matches(pattern))
-      .order { first_name.lower.asc }
-end
-
-User.group { organisation_id }
-    .having { id.count.gt(1) }
-```
-
-The outer `AW.build` block supplies value-side helpers while wharel's inner block supplies
-Arel columns. For example, `lower` in the hash is an arel_where helper, whereas
-`first_name.lower` in the ordering is an Arel expression. The inner block has its own
-receiver and does not inherit the outer block's bare helpers. Ordinary hash calls to
-`where` and `having` continue through arel_where's predicate handlers.
-
-When changing the block's `self` is undesirable, pass the relation row explicitly. This
-form keeps the surrounding caller context:
-
-```ruby
-User.order { |row| row.first_name.lower.asc }
-```
+Unlike the broader [baby_squeel](https://github.com/rzane/baby_squeel) association DSL,
+these blocks expose the current model's columns. Use ordinary Active Record joins and
+explicit Arel references for cross-table queries.
 
 ## Development
 
@@ -384,3 +420,8 @@ Bug reports and pull requests are welcome on GitHub at https://github.com/Nicola
 ## License
 
 The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
+
+The block query implementation in `lib/arel_where/block_queries.rb` is adapted from
+[wharel by Chris Salzberg](https://github.com/shioyama/wharel/tree/3b9079ccb84afdaaeb5dfd9a23017531ab77c8de),
+Copyright (c) 2018 Chris Salzberg. Its original MIT license is preserved in
+[licenses/wharel-MIT.txt](licenses/wharel-MIT.txt) and included in the packaged gem.
