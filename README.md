@@ -14,16 +14,6 @@ gem "arel_where"
 Requires Ruby 3.1+ and Active Record 7.0 through 8.x. The test suite covers Active Record
 7.0, 7.1, 7.2, 8.0, and 8.1.
 
-Loading the gem enables its query extensions application wide. Two changes to existing
-Active Record behavior are worth knowing before using it:
-
-- `relation.select { ... }` builds SQL selection. For Ruby record filtering, use
-  `relation.to_a.select { |record| ... }`.
-- A `Proc` used as a hash condition's value receives the Arel column and builds a predicate.
-
-Calls without blocks otherwise keep their normal Active Record behavior. The shorthand
-options described later are not enabled automatically.
-
 ## Quick start: hash predicates
 
 Enable the refinement at the top of a file to call predicate helpers without an `AW.`
@@ -456,7 +446,16 @@ class defining its own `lower` keeps that method. The helper names are computed 
 gem loads from Arel predicates and the built-in functions; predicates added to Arel later
 are not automatically included.
 
-### Application-wide integration
+## Compatibility considerations
+
+Loading the gem enables its query extensions application wide:
+
+- `relation.select { ... }` builds SQL selection. For Ruby record filtering, use
+  `relation.to_a.select { |record| ... }`.
+- A `Proc` used as a hash condition's value receives the Arel column and builds a predicate.
+
+Other calls without blocks keep their normal Active Record behavior. Refinements and
+helper mixins are not enabled automatically.
 
 On load, the gem prepends handlers to `ActiveRecord::PredicateBuilder` for `AW::Expr`
 expressions and `Proc` values. The latter enables callbacks such as:
@@ -467,8 +466,7 @@ Email.where(address: ->(column) { column.matches("%@example.com") })
 
 Any existing `Proc` hash value is consequently interpreted as a predicate callback.
 Block handling is also prepended to `ActiveRecord::Base` class methods,
-`ActiveRecord::Relation`, and `ActiveRecord::QueryMethods::WhereChain`. This includes the
-changed meaning of `select` blocks described during installation.
+`ActiveRecord::Relation`, and `ActiveRecord::QueryMethods::WhereChain`.
 
 The gem defines top-level `AW` and `ArelWhereRefine` constants. An application that already
 uses either name must resolve that conflict.
