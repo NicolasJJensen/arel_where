@@ -16,8 +16,13 @@ Requires Ruby 3.1+ and Active Record 7.0 through 8.x. The test suite covers Acti
 
 ## Quick start: hash predicates
 
-Enable the refinement at the top of a file to call predicate helpers without an `AW.`
-prefix:
+Use `AW` to build a predicate for the column named by the hash key:
+
+```ruby
+User.where(first_name: AW.matches("nic%"))
+```
+
+To omit the `AW.` prefix, enable the refinement at the top of the file:
 
 ```ruby
 using ArelWhereRefine
@@ -25,13 +30,11 @@ using ArelWhereRefine
 User.where(first_name: matches("nic%"))
 ```
 
-The hash key supplies the column; `matches("nic%")` supplies its condition. The refinement
-makes helpers available to code written after `using` in that file, or inside the class or
+The refinement makes helpers available to code written after `using` in that file, or inside the class or
 module where you enable it. It does not install methods globally.
 
-The hash-predicate examples below assume this refinement is active unless they demonstrate
-another way to enable helpers. Examples also assume your application has the models and
-columns shown. Without the refinement, you can write `AW.matches("nic%")` explicitly.
+The following hash-predicate examples use the refinement unless they demonstrate another
+helper setup. Adapt the model and column names to your application.
 
 ## Filtering with hash conditions
 
